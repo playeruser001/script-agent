@@ -1,9 +1,10 @@
-// EdgeOne Pages 边缘函数 - 扣子 API 中转
+// EdgeOne Pages 边缘函数 - 扣子编程项目 API 中转
 // 部署后访问路径为 /chat
-// 
-// ⚠️ 使用前必须先在 EdgeOne 项目的"环境变量"里配置两个变量：
-//    - COZE_TOKEN  : 你的扣子访问令牌（以 pat_ 开头）
-//    - BOT_ID      : 你的智能体 ID（7641240317169205263）
+//
+// ⚠️ 使用前必须先在 EdgeOne 项目的"环境变量"里配置：
+//    - COZE_TOKEN     : 你的扣子编程项目 API Token（在部署页右上角"API Token"按钮里生成）
+//    - COZE_ENDPOINT  : 你的项目专属域名，例如 https://qqzqm2qrjr.coze.site/stream_run
+//    - PROJECT_ID     : 你的项目 ID（数字，例如 7641240317169205263）
 
 export async function onRequest({ request, env }) {
   const corsHeaders = {
@@ -25,74 +26,119 @@ export async function onRequest({ request, env }) {
 
   try {
     const body = await request.json();
-    const userMessage = body.message;
+    const userMessage = body.message || "";
     const userId = body.user_id || "user_" + Date.now();
 
-    const COZE_TOKEN = env.COZE_TOKEN;
-    const BOT_ID = env.BOT_ID;
+    const COZE_TOKEN    = env.COZE_TOKEN;
+    const COZE_ENDPOINT = env.COZE_ENDPOINT;
+    const PROJECT_ID    = env.PROJECT_ID;
 
-    if (!COZE_TOKEN || !BOT_ID) {
+    if (!COZE_TOKEN || !COZE_ENDPOINT || !PROJECT_ID) {
       return new Response(
-        JSON.stringify({ reply: "⚠️ 边缘函数未配置 COZE_TOKEN 或 BOT_ID 环境变量" }),
+        JSON.stringify({ reply: "⚠️ 边缘函数未配置 COZE_TOKEN / COZE_ENDPOINT / PROJECT_ID 环境变量" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // 1. 发起对话
-    const cozeResponse = await fetch("https://api.coze.cn/v3/chat", {
+    // 调扣子编程的 stream_run API
+    const cozeResponse = await fetch(COZE_ENDPOINT, {
       method: "POST",
       headers: {
         "Authorization": "Bearer " + COZE_TOKEN,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        bot_id: BOT_ID,
-        user_id: userId,
-        stream: false,
-        auto_save_history: true,
-        additional_messages: [
-          { role: "user", content: userMessage, content_type: "text" },
-        ],
+        content: {
+          query: {
+            prompt: [
+              {
+                type: "text",
+                content: { text: userMessage },
+              },
+            ],
+          },
+        },
+        type: "query",
+        session_id: userId,
+        project_id: Number(PROJECT_ID),
       }),
     });
 
-    const initData = await cozeResponse.json();
-    if (!initData.data) {
+    if (!cozeResponse.ok) {
+      const errText = await cozeResponse.text();
       return new Response(
-        JSON.stringify({ reply: "扣子 API 返回异常：" + JSON.stringify(initData) }),
+        JSON.stringify({ reply: `扣子 API 错误 (${cozeResponse.status}): ${errText}` }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const chatId = initData.data.id;
-    const conversationId = initData.data.conversation_id;
+    // 解析 SSE 流：一行一行读取，累积所有 answer 事件的文本
+    const reader = cozeResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullAnswer = "";
+    let errorMsg = "";
 
-    // 2. 轮询等待回复完成
-    let status = "in_progress";
-    let attempts = 0;
-    while (status === "in_progress" && attempts < 60) {
-      await new Promise(r => setTimeout(r, 1000));
-      const statusRes = await fetch(
-        `https://api.coze.cn/v3/chat/retrieve?chat_id=${chatId}&conversation_id=${conversationId}`,
-        { headers: { "Authorization": "Bearer " + COZE_TOKEN } }
-      );
-      const statusData = await statusRes.json();
-      status = statusData.data.status;
-      attempts++;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE 按 \n\n 分块
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+
+      for (const chunk of chunks) {
+        const lines = chunk.split("\n");
+        let eventType = "";
+        let dataLine = "";
+
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventType = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            dataLine = line.slice(5).trim();
+          }
+        }
+
+        if (!dataLine || dataLine === "[DONE]") continue;
+
+        try {
+          const parsed = JSON.parse(dataLine);
+
+          if (eventType === "answer" || parsed.event === "answer") {
+            const content = parsed.data?.content
+                         || parsed.content
+                         || parsed.data?.message
+                         || "";
+            if (typeof content === "string") {
+              fullAnswer += content;
+            } else if (content && typeof content === "object") {
+              fullAnswer += content.text || JSON.stringify(content);
+            }
+          }
+
+          if (eventType === "error" || parsed.event === "error") {
+            errorMsg = parsed.data?.message || parsed.message || JSON.stringify(parsed);
+          }
+        } catch (e) {
+          // 这一行解析失败就跳过
+        }
+      }
     }
 
-    // 3. 取最终回复
-    const msgRes = await fetch(
-      `https://api.coze.cn/v3/chat/message/list?chat_id=${chatId}&conversation_id=${conversationId}`,
-      { headers: { "Authorization": "Bearer " + COZE_TOKEN } }
-    );
-    const msgData = await msgRes.json();
-    const answer = msgData.data.find(m => m.type === "answer");
+    if (errorMsg) {
+      return new Response(
+        JSON.stringify({ reply: "扣子返回错误：" + errorMsg }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     return new Response(
-      JSON.stringify({ reply: answer ? answer.content : "（无回复）" }),
+      JSON.stringify({ reply: fullAnswer || "（智能体没有返回内容）" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (err) {
     return new Response(
       JSON.stringify({ reply: "出错了：" + err.message }),
