@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Markdown 渲染库 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <style>
   :root {
     --bg: #0a0908;
@@ -232,20 +234,141 @@
     line-height: 1.85;
     font-size: 15.5px;
     letter-spacing: 0.01em;
-    white-space: pre-wrap;
     word-wrap: break-word;
   }
 
+  /* 用户消息保持纯文本风格 */
   .msg.user .msg-body {
     background: var(--user-bg);
     border-left: 2px solid var(--accent);
     color: var(--ink);
+    white-space: pre-wrap;
   }
 
+  /* 机器人消息渲染 Markdown */
   .msg.bot .msg-body {
     background: var(--bot-bg);
     border-left: 2px solid var(--ink-dim);
     color: var(--ink);
+  }
+
+  /* ---- Markdown 内部元素样式（仅作用于 bot 消息） ---- */
+  .msg.bot .msg-body > *:first-child { margin-top: 0; }
+  .msg.bot .msg-body > *:last-child  { margin-bottom: 0; }
+
+  .msg.bot .msg-body p {
+    margin: 0.6em 0;
+  }
+
+  .msg.bot .msg-body strong {
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .msg.bot .msg-body em {
+    color: var(--ink);
+    font-style: italic;
+  }
+
+  .msg.bot .msg-body h1,
+  .msg.bot .msg-body h2,
+  .msg.bot .msg-body h3,
+  .msg.bot .msg-body h4 {
+    color: var(--accent);
+    font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+    font-weight: 500;
+    margin: 1em 0 0.5em;
+    letter-spacing: 0.03em;
+    line-height: 1.3;
+  }
+
+  .msg.bot .msg-body h1 { font-size: 22px; }
+  .msg.bot .msg-body h2 { font-size: 19px; }
+  .msg.bot .msg-body h3 { font-size: 17px; }
+  .msg.bot .msg-body h4 { font-size: 15.5px; }
+
+  .msg.bot .msg-body ul,
+  .msg.bot .msg-body ol {
+    margin: 0.6em 0;
+    padding-left: 1.6em;
+  }
+
+  .msg.bot .msg-body li {
+    margin: 0.25em 0;
+  }
+
+  .msg.bot .msg-body li::marker {
+    color: var(--accent);
+  }
+
+  .msg.bot .msg-body blockquote {
+    border-left: 2px solid var(--accent);
+    padding-left: 14px;
+    margin: 0.8em 0;
+    color: var(--ink-dim);
+    font-style: italic;
+  }
+
+  .msg.bot .msg-body code {
+    background: rgba(201, 169, 97, 0.1);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9em;
+  }
+
+  .msg.bot .msg-body pre {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 0.8em 0;
+  }
+
+  .msg.bot .msg-body pre code {
+    background: transparent;
+    color: var(--ink);
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .msg.bot .msg-body hr {
+    border: none;
+    border-top: 1px solid var(--line);
+    margin: 1.2em 0;
+  }
+
+  .msg.bot .msg-body a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--accent);
+  }
+
+  .msg.bot .msg-body a:hover {
+    border-bottom-style: solid;
+  }
+
+  .msg.bot .msg-body table {
+    border-collapse: collapse;
+    margin: 0.8em 0;
+    width: 100%;
+  }
+
+  .msg.bot .msg-body th,
+  .msg.bot .msg-body td {
+    border: 1px solid var(--line);
+    padding: 8px 12px;
+    text-align: left;
+  }
+
+  .msg.bot .msg-body th {
+    background: var(--bot-bg);
+    color: var(--accent);
+    font-weight: 700;
   }
 
   .typing {
@@ -376,15 +499,20 @@
 </div>
 
 <script>
-  // ====== 网页会自动调用同域名下的 /chat 接口，所以这里不用改任何东西 ======
-  // ====== 边缘函数会部署在 /chat 路径，跟这个 HTML 在同一个项目里 ======
-
   const API_URL = "/chat";
   const userId = "user_" + Math.random().toString(36).slice(2, 10);
   const main = document.getElementById("main");
   const welcome = document.getElementById("welcome");
   const input = document.getElementById("input");
   const sendBtn = document.getElementById("send");
+
+  // 配置 marked：用 GFM（GitHub 风格 Markdown），自动换行
+  if (window.marked) {
+    marked.setOptions({
+      gfm: true,
+      breaks: true,    // 单个换行也算换行
+    });
+  }
 
   // 自动撑高输入框
   input.addEventListener("input", () => {
@@ -402,7 +530,6 @@
 
   sendBtn.addEventListener("click", send);
 
-  // 快捷提示
   document.querySelectorAll(".prompt-chip").forEach(btn => {
     btn.addEventListener("click", () => {
       input.value = btn.dataset.text;
@@ -418,10 +545,21 @@
       <div class="msg-label">${role === "user" ? "YOU · 编剧" : "AGENT · 工坊"}</div>
       <div class="msg-body"></div>
     `;
+    // 用户消息直接显示原文，机器人消息后续会替换
     div.querySelector(".msg-body").textContent = text;
     main.appendChild(div);
     main.scrollTop = main.scrollHeight;
     return div.querySelector(".msg-body");
+  }
+
+  // 渲染 Markdown 到指定容器（仅给 bot 用）
+  function renderMarkdown(container, mdText) {
+    if (window.marked && typeof marked.parse === "function") {
+      container.innerHTML = marked.parse(mdText);
+    } else {
+      // marked 没加载成功，降级为纯文本
+      container.textContent = mdText;
+    }
   }
 
   async function send() {
@@ -443,9 +581,11 @@
         body: JSON.stringify({ message: text, user_id: userId }),
       });
       const data = await res.json();
-      botBody.textContent = data.reply || "（没有收到回复）";
+      const reply = data.reply || "（没有收到回复）";
+      // 机器人回复用 Markdown 渲染
+      renderMarkdown(botBody, reply);
     } catch (err) {
-      botBody.textContent = "⚠️ 连接失败：" + err.message + "\n\n请检查边缘函数是否已正确部署。";
+      botBody.textContent = "⚠️ 连接失败：" + err.message;
     } finally {
       sendBtn.disabled = false;
       main.scrollTop = main.scrollHeight;
