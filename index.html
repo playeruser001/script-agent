@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>剧本创作工坊 · Script Atelier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0908;
+    --bg-soft: #14110f;
+    --ink: #ebe5d8;
+    --ink-dim: #8a8275;
+    --accent: #c9a961;
+    --accent-glow: rgba(201, 169, 97, 0.15);
+    --line: rgba(235, 229, 216, 0.08);
+    --user-bg: rgba(201, 169, 97, 0.08);
+    --bot-bg: rgba(235, 229, 216, 0.03);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Noto Serif SC', 'Cormorant Garamond', serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at top left, rgba(201, 169, 97, 0.06), transparent 50%),
+      radial-gradient(ellipse at bottom right, rgba(120, 60, 40, 0.04), transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 3px);
+    pointer-events: none;
+    opacity: 0.4;
+    z-index: 1;
+    mix-blend-mode: overlay;
+  }
+
+  .app {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100vh;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  header {
+    padding: 36px 0 24px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+
+  .brand-mark {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 32px;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+
+  .brand-cn {
+    font-family: 'Noto Serif SC', serif;
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 0.4em;
+    color: var(--ink);
+  }
+
+  .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .meta .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
+    50% { opacity: 0.6; box-shadow: 0 0 0 6px transparent; }
+  }
+
+  main {
+    overflow-y: auto;
+    padding: 28px 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+
+  main::-webkit-scrollbar { width: 6px; }
+  main::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+  .welcome {
+    text-align: center;
+    padding: 80px 20px;
+    animation: fadeUp 0.8s ease-out;
+  }
+
+  .welcome .scene-slug {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.3em;
+    margin-bottom: 32px;
+  }
+
+  .welcome h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 400;
+    font-style: italic;
+    font-size: 54px;
+    line-height: 1.1;
+    color: var(--ink);
+    margin-bottom: 18px;
+  }
+
+  .welcome h1 em {
+    font-style: normal;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .welcome p {
+    font-size: 15px;
+    color: var(--ink-dim);
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.7;
+    letter-spacing: 0.02em;
+  }
+
+  .prompts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 36px;
+  }
+
+  .prompt-chip {
+    padding: 9px 18px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-dim);
+    font-family: 'Noto Serif SC', serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .prompt-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow);
+  }
+
+  .msg {
+    margin-bottom: 28px;
+    animation: fadeUp 0.5s ease-out;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .msg-label::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+  }
+
+  .msg.user .msg-label { color: var(--accent); }
+  .msg.bot .msg-label { color: var(--ink-dim); }
+
+  .msg-body {
+    padding: 18px 22px;
+    border-radius: 2px;
+    line-height: 1.85;
+    font-size: 15.5px;
+    letter-spacing: 0.01em;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .msg.user .msg-body {
+    background: var(--user-bg);
+    border-left: 2px solid var(--accent);
+    color: var(--ink);
+  }
+
+  .msg.bot .msg-body {
+    background: var(--bot-bg);
+    border-left: 2px solid var(--ink-dim);
+    color: var(--ink);
+  }
+
+  .typing {
+    display: inline-flex;
+    gap: 4px;
+  }
+  .typing span {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: bounce 1.4s infinite ease-in-out;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+
+  footer {
+    padding: 20px 0 28px;
+    border-top: 1px solid var(--line);
+  }
+
+  .input-wrap {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 14px 16px;
+    transition: border-color 0.3s ease;
+  }
+
+  .input-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+
+  textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--ink);
+    font-family: 'Noto Serif SC', serif;
+    font-size: 15px;
+    line-height: 1.6;
+    resize: none;
+    max-height: 140px;
+    min-height: 24px;
+  }
+
+  textarea::placeholder { color: var(--ink-dim); font-style: italic; }
+
+  button.send {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 8px 22px;
+    border-radius: 2px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  button.send:hover:not(:disabled) {
+    background: var(--ink);
+    transform: translateY(-1px);
+  }
+
+  button.send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .footnote {
+    text-align: center;
+    margin-top: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 0.2em;
+  }
+
+  @media (max-width: 640px) {
+    .app { padding: 0 20px; }
+    .welcome h1 { font-size: 38px; }
+    .brand-cn { font-size: 14px; letter-spacing: 0.3em; }
+    header { padding: 24px 0 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <span class="brand-mark">S.</span>
+      <span class="brand-cn">剧 本 工 坊</span>
+    </div>
+    <div class="meta"><span class="dot"></span>ONLINE · TAKE 01</div>
+  </header>
+
+  <main id="main">
+    <div class="welcome" id="welcome">
+      <div class="scene-slug">— FADE IN —</div>
+      <h1>从一个念头<br>到一部 <em>爆款</em></h1>
+      <p>告诉我你的主题、关键词，或丢一段已有剧本进来。我会帮你拆解结构、设计钩子、打磨冲突，一直到最后那个让人记住的镜头。</p>
+      <div class="prompts">
+        <button class="prompt-chip" data-text="帮我写一个关于职场反转的短视频剧本">职场反转</button>
+        <button class="prompt-chip" data-text="给我一个三秒钩子，主题是穿越古代">三秒钩子</button>
+        <button class="prompt-chip" data-text="分析一下爆款短剧的结构套路">爆款拆解</button>
+        <button class="prompt-chip" data-text="帮我优化一下抖音风格的开头">抖音开头</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="input-wrap">
+      <textarea id="input" placeholder="此处落笔……" rows="1"></textarea>
+      <button class="send" id="send">发送</button>
+    </div>
+    <div class="footnote">PRESS ENTER TO SEND · SHIFT+ENTER FOR NEW LINE</div>
+  </footer>
+</div>
+
+<script>
+  // ====== 网页会自动调用同域名下的 /chat 接口，所以这里不用改任何东西 ======
+  // ====== 边缘函数会部署在 /chat 路径，跟这个 HTML 在同一个项目里 ======
+
+  const API_URL = "/chat";
+  const userId = "user_" + Math.random().toString(36).slice(2, 10);
+  const main = document.getElementById("main");
+  const welcome = document.getElementById("welcome");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+
+  // 自动撑高输入框
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 140) + "px";
+  });
+
+  // 回车发送
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  sendBtn.addEventListener("click", send);
+
+  // 快捷提示
+  document.querySelectorAll(".prompt-chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      input.value = btn.dataset.text;
+      input.focus();
+    });
+  });
+
+  function addMessage(role, text) {
+    if (welcome) { welcome.remove(); }
+    const div = document.createElement("div");
+    div.className = "msg " + role;
+    div.innerHTML = `
+      <div class="msg-label">${role === "user" ? "YOU · 编剧" : "AGENT · 工坊"}</div>
+      <div class="msg-body"></div>
+    `;
+    div.querySelector(".msg-body").textContent = text;
+    main.appendChild(div);
+    main.scrollTop = main.scrollHeight;
+    return div.querySelector(".msg-body");
+  }
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+
+    addMessage("user", text);
+    input.value = "";
+    input.style.height = "auto";
+    sendBtn.disabled = true;
+
+    const botBody = addMessage("bot", "");
+    botBody.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, user_id: userId }),
+      });
+      const data = await res.json();
+      botBody.textContent = data.reply || "（没有收到回复）";
+    } catch (err) {
+      botBody.textContent = "⚠️ 连接失败：" + err.message + "\n\n请检查边缘函数是否已正确部署。";
+    } finally {
+      sendBtn.disabled = false;
+      main.scrollTop = main.scrollHeight;
+      input.focus();
+    }
+  }
+</script>
+</body>
+</html>
