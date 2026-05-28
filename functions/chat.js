@@ -1,7 +1,7 @@
-// EdgeOne Pages 边缘函数 - 扣子编程项目 API 中转（最终版）
+// EdgeOne Pages 边缘函数 - 扣子编程项目 API 中转（流式版，解决长内容超时）
 // 部署后访问路径为 /chat
 //
-// ⚠️ 必须在 EdgeOne 项目"环境变量"里配置三个变量：
+// ⚠️ 必须在 EdgeOne 项目"环境变量"里配置：
 //    - COZE_TOKEN     : 扣子编程项目 API Token
 //    - COZE_ENDPOINT  : 项目专属域名，例如 https://qqzqm2qrjr.coze.site/stream_run
 //    - PROJECT_ID     : 项目 ID（纯数字）
@@ -18,10 +18,7 @@ export async function onRequest({ request, env }) {
   }
 
   if (request.method !== "POST") {
-    return new Response(
-      JSON.stringify({ reply: "只支持 POST 请求" }),
-      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response("只支持 POST 请求", { status: 405, headers: corsHeaders });
   }
 
   try {
@@ -35,11 +32,12 @@ export async function onRequest({ request, env }) {
 
     if (!COZE_TOKEN || !COZE_ENDPOINT || !PROJECT_ID) {
       return new Response(
-        JSON.stringify({ reply: "⚠️ 边缘函数未配置 COZE_TOKEN / COZE_ENDPOINT / PROJECT_ID 环境变量" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        "data: " + JSON.stringify({ error: "⚠️ 边缘函数未配置 COZE_TOKEN / COZE_ENDPOINT / PROJECT_ID 环境变量" }) + "\n\n",
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "text/event-stream" } }
       );
     }
 
+    // 调扣子编程的 stream_run API（流式）
     const cozeResponse = await fetch(COZE_ENDPOINT, {
       method: "POST",
       headers: {
@@ -50,10 +48,7 @@ export async function onRequest({ request, env }) {
         content: {
           query: {
             prompt: [
-              {
-                type: "text",
-                content: { text: userMessage },
-              },
+              { type: "text", content: { text: userMessage } },
             ],
           },
         },
@@ -66,75 +61,82 @@ export async function onRequest({ request, env }) {
     if (!cozeResponse.ok) {
       const errText = await cozeResponse.text();
       return new Response(
-        JSON.stringify({ reply: `扣子 API 错误 (${cozeResponse.status}): ${errText}` }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        "data: " + JSON.stringify({ error: `扣子 API 错误 (${cozeResponse.status}): ${errText}` }) + "\n\n",
+        { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } }
       );
     }
 
-    // 解析 SSE 流
-    // 数据结构：每行 "event: message" + "data: {JSON}"
-    // 关键字段：data.type === "answer" 时，data.content.answer 是文本片段
-    // 按 sequence_id 顺序拼接所有 answer 片段，得到完整回复
-    const rawText = await cozeResponse.text();
-    const answerMap = new Map();  // sequence_id -> text，去重 + 排序
-    let errorMsg = "";
+    // 关键改动：一边读扣子的流，一边把提取出的文本片段实时转发给前端
+    // 这样函数不需要"挂着等全部生成完"，从根本上避免超时
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const reader = cozeResponse.body.getReader();
 
-    // 按 SSE 规范：事件之间用空行（\n\n）分隔
-    const events = rawText.split(/\r?\n\r?\n/);
+    const stream = new ReadableStream({
+      async start(controller) {
+        let buffer = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-    for (const eventBlock of events) {
-      if (!eventBlock.trim()) continue;
+            // 扣子的 SSE 用 \n\n 分块
+            const chunks = buffer.split(/\r?\n\r?\n/);
+            buffer = chunks.pop() || "";
 
-      // 取 data: 后面的 JSON 部分
-      const lines = eventBlock.split(/\r?\n/);
-      let dataStr = "";
-      for (const line of lines) {
-        if (line.startsWith("data:")) {
-          dataStr = line.slice(5).trim();
-          break;
-        }
-      }
-      if (!dataStr || dataStr === "[DONE]") continue;
+            for (const chunk of chunks) {
+              // 取 data: 后面的 JSON
+              let dataStr = "";
+              for (const line of chunk.split(/\r?\n/)) {
+                if (line.startsWith("data:")) { dataStr = line.slice(5).trim(); break; }
+              }
+              if (!dataStr || dataStr === "[DONE]") continue;
 
-      try {
-        const parsed = JSON.parse(dataStr);
-
-        if (parsed.type === "answer") {
-          const piece = parsed.content?.answer;
-          if (typeof piece === "string" && piece.length > 0) {
-            // 用 sequence_id 做 key 去重（流式传输有时会重复推送）
-            answerMap.set(parsed.sequence_id, piece);
+              try {
+                const parsed = JSON.parse(dataStr);
+                // answer 类型：把文本片段实时发给前端
+                if (parsed.type === "answer") {
+                  const piece = parsed.content?.answer;
+                  if (typeof piece === "string" && piece.length > 0) {
+                    controller.enqueue(encoder.encode(
+                      "data: " + JSON.stringify({ delta: piece }) + "\n\n"
+                    ));
+                  }
+                } else if (parsed.type === "error" || parsed.content?.error) {
+                  const em = parsed.content?.error?.message || parsed.content?.error || "未知错误";
+                  controller.enqueue(encoder.encode(
+                    "data: " + JSON.stringify({ error: String(em) }) + "\n\n"
+                  ));
+                }
+              } catch (e) { /* 跳过解析失败的块 */ }
+            }
           }
-        } else if (parsed.type === "error" || parsed.content?.error) {
-          errorMsg = parsed.content?.error?.message
-                  || parsed.content?.error
-                  || JSON.stringify(parsed);
+          // 通知前端结束
+          controller.enqueue(encoder.encode("data: " + JSON.stringify({ done: true }) + "\n\n"));
+          controller.close();
+        } catch (err) {
+          controller.enqueue(encoder.encode(
+            "data: " + JSON.stringify({ error: "读取流出错：" + err.message }) + "\n\n"
+          ));
+          controller.close();
         }
-      } catch (e) {
-        // 跳过解析失败的块
-      }
-    }
+      },
+    });
 
-    if (errorMsg) {
-      return new Response(
-        JSON.stringify({ reply: "扣子返回错误：" + errorMsg }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // 按 sequence_id 升序拼接
-    const sortedKeys = Array.from(answerMap.keys()).sort((a, b) => a - b);
-    const fullAnswer = sortedKeys.map(k => answerMap.get(k)).join("");
-
-    return new Response(
-      JSON.stringify({ reply: fullAnswer || "（智能体没有返回内容）" }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
+    });
 
   } catch (err) {
     return new Response(
-      JSON.stringify({ reply: "出错了：" + err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      "data: " + JSON.stringify({ error: "出错了：" + err.message }) + "\n\n",
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "text/event-stream" } }
     );
   }
 }
