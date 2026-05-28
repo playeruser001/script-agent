@@ -1,4 +1,4 @@
-// EdgeOne Pages 边缘函数 - 扣子编程项目 API 中转（流式版，解决长内容超时）
+// EdgeOne Pages 边缘函数 - 扣子编程项目 API 中转（流式版 v2，修复长内容 network error）
 // 部署后访问路径为 /chat
 //
 // ⚠️ 必须在 EdgeOne 项目"环境变量"里配置：
@@ -37,7 +37,6 @@ export async function onRequest({ request, env }) {
       );
     }
 
-    // 调扣子编程的 stream_run API（流式）
     const cozeResponse = await fetch(COZE_ENDPOINT, {
       method: "POST",
       headers: {
@@ -66,70 +65,62 @@ export async function onRequest({ request, env }) {
       );
     }
 
-    // 关键改动：一边读扣子的流，一边把提取出的文本片段实时转发给前端
-    // 这样函数不需要"挂着等全部生成完"，从根本上避免超时
-    const decoder = new TextDecoder();
+    // 用 TransformStream 边读边转发：把扣子的 SSE 流实时转成给前端的 delta 流
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
     const encoder = new TextEncoder();
-    const reader = cozeResponse.body.getReader();
+    const decoder = new TextDecoder();
 
-    const stream = new ReadableStream({
-      async start(controller) {
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
+    // 异步处理：读扣子的流 -> 解析 -> 写给前端（不 await，让响应先返回，避免函数等待整体完成）
+    (async () => {
+      const reader = cozeResponse.body.getReader();
+      let buffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
 
-            // 扣子的 SSE 用 \n\n 分块
-            const chunks = buffer.split(/\r?\n\r?\n/);
-            buffer = chunks.pop() || "";
+          const chunks = buffer.split(/\r?\n\r?\n/);
+          buffer = chunks.pop() || "";
 
-            for (const chunk of chunks) {
-              // 取 data: 后面的 JSON
-              let dataStr = "";
-              for (const line of chunk.split(/\r?\n/)) {
-                if (line.startsWith("data:")) { dataStr = line.slice(5).trim(); break; }
-              }
-              if (!dataStr || dataStr === "[DONE]") continue;
-
-              try {
-                const parsed = JSON.parse(dataStr);
-                // answer 类型：把文本片段实时发给前端
-                if (parsed.type === "answer") {
-                  const piece = parsed.content?.answer;
-                  if (typeof piece === "string" && piece.length > 0) {
-                    controller.enqueue(encoder.encode(
-                      "data: " + JSON.stringify({ delta: piece }) + "\n\n"
-                    ));
-                  }
-                } else if (parsed.type === "error" || parsed.content?.error) {
-                  const em = parsed.content?.error?.message || parsed.content?.error || "未知错误";
-                  controller.enqueue(encoder.encode(
-                    "data: " + JSON.stringify({ error: String(em) }) + "\n\n"
-                  ));
-                }
-              } catch (e) { /* 跳过解析失败的块 */ }
+          for (const chunk of chunks) {
+            let dataStr = "";
+            for (const line of chunk.split(/\r?\n/)) {
+              if (line.startsWith("data:")) { dataStr = line.slice(5).trim(); break; }
             }
-          }
-          // 通知前端结束
-          controller.enqueue(encoder.encode("data: " + JSON.stringify({ done: true }) + "\n\n"));
-          controller.close();
-        } catch (err) {
-          controller.enqueue(encoder.encode(
-            "data: " + JSON.stringify({ error: "读取流出错：" + err.message }) + "\n\n"
-          ));
-          controller.close();
-        }
-      },
-    });
+            if (!dataStr || dataStr === "[DONE]") continue;
 
-    return new Response(stream, {
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.type === "answer") {
+                const piece = parsed.content?.answer;
+                if (typeof piece === "string" && piece.length > 0) {
+                  await writer.write(encoder.encode("data: " + JSON.stringify({ delta: piece }) + "\n\n"));
+                }
+              } else if (parsed.type === "error" || parsed.content?.error) {
+                const em = parsed.content?.error?.message || parsed.content?.error || "未知错误";
+                await writer.write(encoder.encode("data: " + JSON.stringify({ error: String(em) }) + "\n\n"));
+              }
+            } catch (e) { /* 跳过解析失败的块 */ }
+          }
+        }
+        await writer.write(encoder.encode("data: " + JSON.stringify({ done: true }) + "\n\n"));
+      } catch (err) {
+        try {
+          await writer.write(encoder.encode("data: " + JSON.stringify({ error: "读取流出错：" + err.message }) + "\n\n"));
+        } catch (e) {}
+      } finally {
+        try { await writer.close(); } catch (e) {}
+      }
+    })();
+
+    // 注意：只设必要的头，不要手动设 Connection / Keep-Alive / Transfer-Encoding
+    return new Response(readable, {
       headers: {
         ...corsHeaders,
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
       },
     });
 
