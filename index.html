@@ -574,16 +574,61 @@
     const botBody = addMessage("bot", "");
     botBody.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
 
+    let fullText = "";   // 累积收到的全部文本
+    let started = false; // 是否已经开始收到内容（用于清掉打字动画）
+
     try {
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, user_id: userId }),
       });
-      const data = await res.json();
-      const reply = data.reply || "（没有收到回复）";
-      // 机器人回复用 Markdown 渲染
-      renderMarkdown(botBody, reply);
+
+      if (!res.ok || !res.body) {
+        throw new Error("HTTP " + res.status);
+      }
+
+      // 边读流边显示（打字机效果），从根本上避免长内容超时
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // 后端用 SSE 格式：data: {...}\n\n
+        const chunks = buffer.split(/\r?\n\r?\n/);
+        buffer = chunks.pop() || "";
+
+        for (const chunk of chunks) {
+          let dataStr = "";
+          for (const line of chunk.split(/\r?\n/)) {
+            if (line.startsWith("data:")) { dataStr = line.slice(5).trim(); break; }
+          }
+          if (!dataStr) continue;
+
+          try {
+            const obj = JSON.parse(dataStr);
+            if (obj.delta) {
+              if (!started) { started = true; botBody.innerHTML = ""; }
+              fullText += obj.delta;
+              renderMarkdown(botBody, fullText);
+              main.scrollTop = main.scrollHeight;
+            } else if (obj.error) {
+              if (!started) { started = true; botBody.innerHTML = ""; }
+              botBody.textContent = "⚠️ " + obj.error;
+            } else if (obj.done) {
+              // 流结束
+            }
+          } catch (e) { /* 跳过解析失败的块 */ }
+        }
+      }
+
+      if (!started) {
+        botBody.textContent = "（智能体没有返回内容）";
+      }
     } catch (err) {
       botBody.textContent = "⚠️ 连接失败：" + err.message;
     } finally {
